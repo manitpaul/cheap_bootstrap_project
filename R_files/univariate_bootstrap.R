@@ -61,6 +61,29 @@ simulate_bootstrap <- function(
         L_Bm <- 2 * theta_hat - r0_Bm
         U_Bm <- 2 * theta_hat - l0_Bm
 
+        # ---- Randomized modified bootstrap (D) ----
+        l_idx_Rm <- floor((alpha / 2) * (B + 1))
+        x_alpha_B <- (B + 1) * (1 - alpha)
+        is_x_integer <- abs(x_alpha_B - round(x_alpha_B)) < sqrt(.Machine$double.eps)
+        if (is_x_integer) {
+          tau_alpha_B <- 1
+        } else {
+          tau_alpha_B <- ((1 - alpha) - (floor(x_alpha_B) / (B + 1))) /
+            ((ceiling(x_alpha_B) - floor(x_alpha_B)) / (B + 1))
+        }
+        U_rand <- runif(1)
+        if (U_rand <= tau_alpha_B) {
+          r_idx_Rm <- ceiling((1 - alpha) * (B + 1)) + floor((alpha / 2) * (B + 1))
+        } else {
+          r_idx_Rm <- floor((1 - alpha) * (B + 1)) + floor((alpha / 2) * (B + 1))
+        }
+        l_idx_Rm <- max(1L, min(B, l_idx_Rm))
+        r_idx_Rm <- max(1L, min(B, r_idx_Rm))
+        l0_Rm <- boot_means_sorted[l_idx_Rm]
+        r0_Rm <- boot_means_sorted[r_idx_Rm]
+        L_Rm <- 2 * theta_hat - r0_Rm
+        U_Rm <- 2 * theta_hat - l0_Rm
+
         # ---- Cheap bootstrap (C) ----
         S2 <- mean((boot_means - theta_hat)^2)
         S <- sqrt(S2)
@@ -71,9 +94,11 @@ simulate_bootstrap <- function(
         list(
           cov_A = as.integer(theta_true >= L_A & theta_true < U_A),
           cov_Bm = as.integer(theta_true >= L_Bm & theta_true < U_Bm),
+          cov_Rm = as.integer(theta_true >= L_Rm & theta_true < U_Rm),
           cov_C = as.integer(theta_true >= L_C & theta_true < U_C),
           width_A = U_A - L_A,
           width_Bm = U_Bm - L_Bm,
+          width_Rm = U_Rm - L_Rm,
           width_C = U_C - L_C
         )
       },
@@ -82,32 +107,39 @@ simulate_bootstrap <- function(
 
     covered_A <- sum(vapply(iter_results, function(x) x$cov_A, integer(1)))
     covered_Bm <- sum(vapply(iter_results, function(x) x$cov_Bm, integer(1)))
+    covered_Rm <- sum(vapply(iter_results, function(x) x$cov_Rm, integer(1)))
     covered_C <- sum(vapply(iter_results, function(x) x$cov_C, integer(1)))
 
     widths_A <- vapply(iter_results, function(x) x$width_A, numeric(1))
     widths_Bm <- vapply(iter_results, function(x) x$width_Bm, numeric(1))
+    widths_Rm <- vapply(iter_results, function(x) x$width_Rm, numeric(1))
     widths_C <- vapply(iter_results, function(x) x$width_C, numeric(1))
 
     cov_A <- covered_A / n_iter
     cov_Bm <- covered_Bm / n_iter
+    cov_Rm <- covered_Rm / n_iter
     cov_C <- covered_C / n_iter
 
     se_A <- sqrt(cov_A * (1 - cov_A) / n_iter)
     se_Bm <- sqrt(cov_Bm * (1 - cov_Bm) / n_iter)
+    se_Rm <- sqrt(cov_Rm * (1 - cov_Rm) / n_iter)
     se_C <- sqrt(cov_C * (1 - cov_C) / n_iter)
 
     mw_A <- mean(widths_A)
     wse_A <- sd(widths_A) / sqrt(n_iter)
     mw_Bm <- mean(widths_Bm)
     wse_Bm <- sd(widths_Bm) / sqrt(n_iter)
+    mw_Rm <- mean(widths_Rm)
+    wse_Rm <- sd(widths_Rm) / sqrt(n_iter)
     mw_C <- mean(widths_C)
     wse_C <- sd(widths_C) / sqrt(n_iter)
 
     out <- rbind(
       out,
-      data.frame(B = B, method = "Usual bootstrap", coverage = cov_A, mc_se = se_A, mean_width = mw_A, width_se = wse_A),
-      data.frame(B = B, method = "Modified bootstrap", coverage = cov_Bm, mc_se = se_Bm, mean_width = mw_Bm, width_se = wse_Bm),
-      data.frame(B = B, method = "Cheap bootstrap", coverage = cov_C, mc_se = se_C, mean_width = mw_C, width_se = wse_C)
+      data.frame(B = B, method = "Usual", coverage = cov_A, mc_se = se_A, mean_width = mw_A, width_se = wse_A),
+      data.frame(B = B, method = "Modified", coverage = cov_Bm, mc_se = se_Bm, mean_width = mw_Bm, width_se = wse_Bm),
+      data.frame(B = B, method = "Randomized modified", coverage = cov_Rm, mc_se = se_Rm, mean_width = mw_Rm, width_se = wse_Rm),
+      data.frame(B = B, method = "Cheap", coverage = cov_C, mc_se = se_C, mean_width = mw_C, width_se = wse_C)
     )
   }
 
