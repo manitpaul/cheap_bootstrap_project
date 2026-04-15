@@ -4,26 +4,37 @@ suppressWarnings({
 library(ggplot2)
 
 # ------------------------------------------------------------
-# Multivariate bootstrap miscoverage simulation in R^100
+# Multivariate subsampling miscoverage simulation in R^100
 # - Data dimension p = 100
 # - n_sample = 100
+# - Subsample size k = floor(n^(2/3)) by default
 # - For each alpha in alpha_grid and c in {2, 4, 6},
 #   B(alpha, c) = ceiling(c / alpha - 1)
-# - We evaluate realized miscoverage of the modified bootstrap:
+# - Realized miscoverage of modified subsampling:
 #   miscoverage = P(S_n > S_(ceiling((B+1)(1-alpha))))
 # ------------------------------------------------------------
-simulate_multivar_miscoverage <- function(
+simulate_multivar_subsampling_miscoverage <- function(
     alpha_grid = c(0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50),
     c_grid = c(2, 4, 6),
-    n_iter = 1000,
+    n_iter = 2500,
     n_sample = 100,
     p = 100,
+    k = NULL,
     seed = 123,
     n_cores = parallel::detectCores(logical = TRUE)
 ) {
   set.seed(seed)
 
   theta0 <- rep(0, p)
+
+  if (is.null(k)) {
+    k <- max(2L, floor(n_sample^(2 / 3)))
+  } else {
+    k <- as.integer(k)
+  }
+  if (k >= n_sample) {
+    stop("k must be strictly smaller than n_sample for subsampling.")
+  }
 
   n_cores <- as.integer(n_cores)
   if (is.na(n_cores) || n_cores < 1L) {
@@ -58,18 +69,18 @@ simulate_multivar_miscoverage <- function(
           theta_hat <- colMeans(Dmat)
           S_n <- sqrt(n_sample) * max(abs(theta_hat - theta0))
 
-          boot_means <- replicate(B, {
-            idx <- sample.int(n_sample, size = n_sample, replace = TRUE)
+          sub_means <- replicate(B, {
+            idx <- sample.int(n_sample, size = k, replace = FALSE)
             colMeans(Dmat[idx, , drop = FALSE])
           })
 
           if (B == 1L) {
-            boot_means <- matrix(boot_means, nrow = p, ncol = 1)
+            sub_means <- matrix(sub_means, nrow = p, ncol = 1)
           }
 
-          centered_boot <- boot_means - theta_hat
-          S_boot <- sqrt(n_sample) * apply(abs(centered_boot), 2, max)
-          S_sorted <- sort(S_boot)
+          centered_sub <- sub_means - theta_hat
+          S_sub <- sqrt(k) * apply(abs(centered_sub), 2, max)
+          S_sorted <- sort(S_sub)
 
           idx_mod <- ceiling((B + 1) * (1 - alpha))
           idx_mod <- max(1L, min(B, idx_mod))
@@ -105,7 +116,7 @@ simulate_multivar_miscoverage <- function(
   out
 }
 
-plot_multivar_miscoverage <- function(df) {
+plot_multivar_subsampling_miscoverage <- function(df) {
   df$curve <- factor(
     df$curve,
     levels = c(
@@ -125,8 +136,8 @@ plot_multivar_miscoverage <- function(df) {
       title = "Realized Miscoverage vs Nominal Miscoverage",
       x = expression(alpha),
       y = "Realized Miscoverage",
-      color = "Bootstrap Size",
-      fill = "Bootstrap Size"
+      color = "Subsampling Size",
+      fill = "Subsampling Size"
     ) +
     theme_bw(base_family = "sans") +
     theme(
@@ -143,51 +154,32 @@ plot_multivar_miscoverage <- function(df) {
 
 # ------------------------------------------------------------
 # Run once, save simulation output, then plot from saved output.
-# This allows plot formatting updates without rerunning simulation.
 # ------------------------------------------------------------
-run_and_save_plot <- function(alpha_grid, seed, rds_file, rdata_file, pdf_file, n_iter = 2500) {
-  miscoverage_df <- simulate_multivar_miscoverage(
-    alpha_grid = alpha_grid,
-    c_grid = c(2, 4, 6),
-    n_iter = n_iter,
-    n_sample = 100,
-    p = 100,
-    seed = seed
-  )
+alpha_grid <- c(0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50)
 
-  saveRDS(miscoverage_df, file = rds_file)
-  save(miscoverage_df, file = rdata_file)
-
-  # Plot from stored results so formatting can be changed later
-  miscoverage_plot_df <- readRDS(rds_file)
-  p_mis <- plot_multivar_miscoverage(miscoverage_plot_df)
-
-  dir.create("PDF_images", recursive = TRUE, showWarnings = FALSE)
-  ggsave(
-    filename = file.path("PDF_images", pdf_file),
-    plot = p_mis,
-    device = "pdf",
-    width = 8,
-    height = 5
-  )
-
-  print(p_mis)
-}
-
-# Original alpha sequence
-run_and_save_plot(
-  alpha_grid = c(0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50),
-  seed = 123,
-  rds_file = "multivariate_bootstrap_alpha_miscoverage.rds",
-  rdata_file = "multivariate_bootstrap_alpha_miscoverage.RData",
-  pdf_file = "multivariate_bootstrap_alpha_miscoverage.pdf"
+miscoverage_df <- simulate_multivar_subsampling_miscoverage(
+  alpha_grid = alpha_grid,
+  c_grid = c(2, 4, 6),
+  n_iter = 2500,
+  n_sample = 100,
+  p = 100,
+  seed = 123
 )
 
-# New alpha sequence: 0.05 to 0.95 by 0.05
-run_and_save_plot(
-  alpha_grid = seq(0.05, 0.95, by = 0.05),
-  seed = 456,
-  rds_file = "multivariate_bootstrap_alpha_miscoverage_05_to_95.rds",
-  rdata_file = "multivariate_bootstrap_alpha_miscoverage_05_to_95.RData",
-  pdf_file = "multivariate_bootstrap_alpha_miscoverage_05_to_95.pdf"
+saveRDS(miscoverage_df, file = "multivariate_subsampling_alpha_miscoverage.rds")
+save(miscoverage_df, file = "multivariate_subsampling_alpha_miscoverage.RData")
+
+# Plot from saved simulation data
+miscoverage_plot_df <- readRDS("multivariate_subsampling_alpha_miscoverage.rds")
+p_mis <- plot_multivar_subsampling_miscoverage(miscoverage_plot_df)
+
+dir.create("PDF_images", recursive = TRUE, showWarnings = FALSE)
+ggsave(
+  filename = file.path("PDF_images", "multivariate_subsampling_alpha_miscoverage.pdf"),
+  plot = p_mis,
+  device = "pdf",
+  width = 8,
+  height = 5
 )
+
+print(p_mis)

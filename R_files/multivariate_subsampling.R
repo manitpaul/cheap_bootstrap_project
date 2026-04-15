@@ -39,7 +39,8 @@ simulate_subsampling_vector_mean <- function(
     n_sample = 100,
     alpha    = 0.10,
     seed     = 123,
-    k        = NULL
+    k        = NULL,
+    n_cores  = parallel::detectCores(logical = TRUE)
 ) {
   set.seed(seed)
 
@@ -56,6 +57,11 @@ simulate_subsampling_vector_mean <- function(
     stop("k must be strictly smaller than n_sample for subsampling.")
   }
 
+  n_cores <- as.integer(n_cores)
+  if (is.na(n_cores) || n_cores < 1L) {
+    n_cores <- 1L
+  }
+
   out <- data.frame(
     B = integer(),
     method = character(),
@@ -65,47 +71,53 @@ simulate_subsampling_vector_mean <- function(
   )
 
   for (B in B_grid) {
-    covered_usual <- logical(n_iter)
-    covered_mod   <- logical(n_iter)
+    iter_results <- parallel::mclapply(
+      X = seq_len(n_iter),
+      FUN = function(iter) {
+        # ----- Generate D_i as n_sample x p matrix -----
+        x_t <- rt(n_sample, df = 5)
+        Xmat <- matrix(rchisq(n_sample * p, df = 1), nrow = n_sample, ncol = p)
+        Dmat <- Xmat * x_t
 
-    for (iter in seq_len(n_iter)) {
-      # ----- Generate D_i as n_sample x p matrix -----
-      x_t  <- rt(n_sample, df = 5)
-      Xmat <- matrix(rchisq(n_sample * p, df = 1), nrow = n_sample, ncol = p)
-      Dmat <- Xmat * x_t
+        # ----- theta_hat: sample mean vector in R^p -----
+        theta_hat <- colMeans(Dmat)
 
-      # ----- theta_hat: sample mean vector in R^p -----
-      theta_hat <- colMeans(Dmat)
+        # ----- S_n = sqrt(n) * max_j |theta_hat_j - theta0_j| -----
+        S_n <- sqrt(n_sample) * max(abs(theta_hat - theta0))
 
-      # ----- S_n = sqrt(n) * max_j |theta_hat_j - theta0_j| -----
-      S_n <- sqrt(n_sample) * max(abs(theta_hat - theta0))
+        # ----- Subsampled mean vectors theta_star^(b) -----
+        sub_means <- replicate(B, {
+          idx <- sample.int(n_sample, size = k, replace = FALSE)
+          colMeans(Dmat[idx, , drop = FALSE])
+        })
 
-      # ----- Subsampled mean vectors theta_star^(b) -----
-      sub_means <- replicate(B, {
-        idx <- sample.int(n_sample, size = k, replace = FALSE)
-        colMeans(Dmat[idx, , drop = FALSE])
-      })
+        # Ensure sub_means is p x B even when B = 1
+        if (B == 1L) {
+          sub_means <- matrix(sub_means, nrow = p, ncol = 1)
+        }
 
-      # Ensure sub_means is p x B even when B = 1
-      if (B == 1L) {
-        sub_means <- matrix(sub_means, nrow = p, ncol = 1)
-      }
+        # ----- Subsampling statistics S_n^b -----
+        centered_sub <- sub_means - theta_hat
+        S_sub <- sqrt(k) * apply(abs(centered_sub), 2, max)
+        S_sorted <- sort(S_sub)
 
-      # ----- Subsampling statistics S_n^b -----
-      centered_sub <- sub_means - theta_hat
-      S_sub <- sqrt(k) * apply(abs(centered_sub), 2, max)
-      S_sorted <- sort(S_sub)
+        # ----- Usual subsampling -----
+        idx_usual <- ceiling(B * (1 - alpha))
+        idx_usual <- max(1L, min(B, idx_usual))
+        cov_usual <- as.integer(S_n <= S_sorted[idx_usual])
 
-      # ----- Usual subsampling -----
-      idx_usual <- ceiling(B * (1 - alpha))
-      idx_usual <- max(1L, min(B, idx_usual))
-      covered_usual[iter] <- (S_n <= S_sorted[idx_usual])
+        # ----- Modified subsampling -----
+        idx_mod <- ceiling((B + 1) * (1 - alpha))
+        idx_mod <- max(1L, min(B, idx_mod))
+        cov_mod <- as.integer(S_n <= S_sorted[idx_mod])
 
-      # ----- Modified subsampling -----
-      idx_mod <- ceiling((B + 1) * (1 - alpha))
-      idx_mod <- max(1L, min(B, idx_mod))
-      covered_mod[iter] <- (S_n <= S_sorted[idx_mod])
-    }
+        list(cov_usual = cov_usual, cov_mod = cov_mod)
+      },
+      mc.cores = n_cores
+    )
+
+    covered_usual <- as.integer(unlist(lapply(iter_results, function(x) x$cov_usual)))
+    covered_mod <- as.integer(unlist(lapply(iter_results, function(x) x$cov_mod)))
 
     # ----- Summaries -----
     cov_usual <- mean(covered_usual)
@@ -163,15 +175,30 @@ plot_coverage <- function(df, alpha, n_ticks = 10) {
 }
 
 # ------------------------------------------------------------
-# Example usage
+# Run simulation once, save cache, then plot from cache
 # ------------------------------------------------------------
 res_df_multi <- simulate_subsampling_vector_mean(
   B_grid   = seq(1, 100),
-  n_iter   = 1000,
-  n_sample = 5000,
+  n_iter   = 500,
+  n_sample = 1000,
   alpha    = 0.10,
   seed     = 123
 )
 
-p_cov <- plot_coverage(res_df_multi, alpha = 0.10, n_ticks = 10)
+saveRDS(res_df_multi, file = "multivariate_subsampling_coverage_cache.rds")
+save(res_df_multi, file = "multivariate_subsampling_coverage_cache.RData")
+
+# Plot from cached data so diagnostics can be changed without rerunning simulation.
+plot_df <- readRDS("multivariate_subsampling_coverage_cache.rds")
+p_cov <- plot_coverage(plot_df, alpha = 0.10, n_ticks = 10)
+
+dir.create("PDF_images", recursive = TRUE, showWarnings = FALSE)
+ggsave(
+  filename = file.path("PDF_images", "new_multivariate_subsampling.pdf"),
+  plot = p_cov,
+  device = "pdf",
+  width = 8,
+  height = 5
+)
+
 print(p_cov)
